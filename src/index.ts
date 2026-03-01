@@ -28,6 +28,8 @@ interface HookInput {
 interface HookState {
   model?: string
   lastToolName?: string
+  lastStopTime?: number
+  sessionStartTime?: number
 }
 
 type EventType = "user_prompt" | "pre_tool" | "post_tool" | "notification" | "stop" | "agent_turn_complete"
@@ -54,6 +56,8 @@ interface AgentEvent {
 const INTERESTING_TOOLS = new Set(["Bash", "Edit", "Write", "WebFetch", "WebSearch", "Task"])
 const TOKEN_PATH = `${homedir()}/.config/moshi/token`
 const API_URL = "https://api.getmoshi.app/api/v1/agent-events"
+const STOP_COOLDOWN_S = 5
+const REPLAY_SUPPRESS_S = 3
 const DEFAULT_SETTINGS_PATH = `${homedir()}/.claude/settings.json`
 const HOOK_COMMAND = `bun ${resolve(import.meta.dirname, "index.ts")}`
 const HOOK_IDENTIFIER = "moshi-hooks"
@@ -313,14 +317,26 @@ async function main() {
 
   const projectName = input.cwd ? basename(input.cwd) : undefined
 
-  // --- SessionStart: persist model, don't POST ---
+  // --- SessionStart: persist model + timestamp, don't POST ---
   if (hook_event_name === "SessionStart") {
-    if (input.model) await writeState(session_id, { model: input.model })
+    await writeState(session_id, {
+      ...(input.model ? { model: input.model } : {}),
+      sessionStartTime: Date.now() / 1000,
+    })
     return
   }
 
   // --- UserPromptSubmit: skip entirely ---
   if (hook_event_name === "UserPromptSubmit") return
+
+  // --- Session replay suppression (3s after SessionStart) ---
+  const now = Date.now() / 1000
+  {
+    const state = await readState(session_id)
+    if (state.sessionStartTime && now - state.sessionStartTime < REPLAY_SUPPRESS_S) {
+      return // suppress replayed events right after session start
+    }
+  }
 
   // --- PreToolUse / PostToolUse: filter to interesting tools ---
   if (hook_event_name === "PreToolUse" || hook_event_name === "PostToolUse") {
@@ -379,12 +395,19 @@ async function main() {
     return
   }
 
-  // --- Stop / SubagentStop ---
+  // --- Stop / SubagentStop (with 5s debounce) ---
   if (hook_event_name === "Stop" || hook_event_name === "SubagentStop") {
+    const state = await readState(session_id)
+
+    // Debounce: suppress if another Stop/SubagentStop fired within 5s
+    if (state.lastStopTime && now - state.lastStopTime < STOP_COOLDOWN_S) {
+      return
+    }
+    await writeState(session_id, { lastStopTime: now })
+
     const token = await loadToken()
     if (!token) return
 
-    const state = await readState(session_id)
     const lastMessage = await getLastAssistantMessage(input.transcript_path)
 
     const event: AgentEvent = {
