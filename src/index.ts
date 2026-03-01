@@ -59,7 +59,7 @@ const API_URL = "https://api.getmoshi.app/api/v1/agent-events"
 const STOP_COOLDOWN_S = 5
 const REPLAY_SUPPRESS_S = 3
 const DEFAULT_SETTINGS_PATH = `${homedir()}/.claude/settings.json`
-const HOOK_COMMAND = `bun ${resolve(import.meta.dirname, "index.ts")}`
+const HOOK_COMMAND = "bunx moshi-hooks"
 const HOOK_IDENTIFIER = "moshi-hooks"
 
 export const HOOK_EVENTS: Record<string, { matcher?: string }> = {
@@ -324,17 +324,17 @@ async function main() {
     return
   }
 
-  // Unknown subcommand — print usage instead of hanging on stdin
-  if (subcommand) {
-    console.error(`Unknown command: ${subcommand}\n`)
+  // Not hook mode — print usage
+  if (subcommand || process.stdin.isTTY) {
+    if (subcommand) console.error(`Unknown command: ${subcommand}\n`)
     console.error("Usage:")
     console.error("  moshi-hooks setup [dir]       Register hooks")
     console.error("  moshi-hooks uninstall [dir]    Remove hooks")
     console.error("  moshi-hooks token [value]      Show or set API token")
-    process.exit(1)
+    process.exit(subcommand ? 1 : 0)
   }
 
-  // No subcommand — hook mode (reads JSON from stdin, invoked by Claude Code)
+  // Hook mode — reads JSON from stdin (invoked by Claude Code)
   const raw = await Bun.stdin.text()
   if (!raw.trim()) return
 
