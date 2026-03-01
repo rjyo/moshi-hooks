@@ -8,44 +8,35 @@ Claude Code → hooks (stdin) → moshi-hooks → Moshi API → APNs → Live Ac
 
 ## Install
 
-Requires [Bun](https://bun.sh). Zero runtime dependencies.
+Requires [Bun](https://bun.sh) (Node.js support planned). Zero runtime dependencies.
 
 ```bash
-git clone <repo-url> ~/projects/moshi-hooks
-cd ~/projects/moshi-hooks
-bun install
+bun i -g moshi-hooks
+```
+
+Or run directly without installing:
+
+```bash
+bunx moshi-hooks setup
 ```
 
 ## Setup
 
-### 1. API token
-
 ```bash
-mkdir -p ~/.config/moshi
-echo "YOUR_API_TOKEN" > ~/.config/moshi/token
+moshi-hooks token <YOUR_TOKEN>
+moshi-hooks setup              # user scope (~/.claude/settings.json)
+moshi-hooks setup .            # project scope (.claude/settings.json in cwd)
+moshi-hooks setup /path/to/dir # project scope (absolute path)
 ```
 
-### 2. Register hooks
-
-**User scope** (all projects, `~/.claude/settings.json`):
-
-```bash
-bun run setup
-```
-
-**Project scope** (single project, `.claude/settings.json`):
-
-```bash
-bun run setup:project
-```
-
-Project-scoped hooks can be committed to the repo and shared with your team. Both are idempotent — safe to run multiple times. Existing hooks from other tools are preserved.
+Project-scoped hooks can be committed to the repo and shared with your team. Both scopes are idempotent — safe to run multiple times. Existing hooks from other tools are preserved.
 
 To remove:
 
 ```bash
-bun run uninstall           # user scope
-bun run uninstall:project   # project scope
+moshi-hooks uninstall              # user scope
+moshi-hooks uninstall .            # project scope
+moshi-hooks uninstall /path/to/dir # project scope
 ```
 
 All hooks run with `async: true` so they never block Claude.

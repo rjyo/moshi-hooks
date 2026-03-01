@@ -5,7 +5,7 @@
 // Zero runtime dependencies — uses Bun builtins only.
 
 import { homedir } from "os"
-import { basename, resolve } from "path"
+import { basename, dirname, resolve } from "path"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -245,13 +245,8 @@ async function saveSettings(settingsPath: string, settings: Record<string, unkno
   await Bun.write(settingsPath, JSON.stringify(settings, null, 2) + "\n")
 }
 
-function resolveSettingsPath(project: boolean, explicit?: string): string {
-  if (explicit) return explicit
-  return project ? resolve(process.cwd(), ".claude", "settings.json") : DEFAULT_SETTINGS_PATH
-}
-
-export async function setup(settingsPath?: string, { project = false }: { project?: boolean } = {}): Promise<void> {
-  const resolved = resolveSettingsPath(project, settingsPath)
+export async function setup(settingsPath?: string): Promise<void> {
+  const resolved = settingsPath ?? DEFAULT_SETTINGS_PATH
   const settings = await loadSettings(resolved)
   const hooks = (settings.hooks ?? {}) as Record<string, HookEntry[]>
 
@@ -279,8 +274,8 @@ export async function setup(settingsPath?: string, { project = false }: { projec
   console.log(`moshi-hooks: registered in ${resolved}`)
 }
 
-export async function uninstall(settingsPath?: string, { project = false }: { project?: boolean } = {}): Promise<void> {
-  const resolved = resolveSettingsPath(project, settingsPath)
+export async function uninstall(settingsPath?: string): Promise<void> {
+  const resolved = settingsPath ?? DEFAULT_SETTINGS_PATH
   const settings = await loadSettings(resolved)
   const hooks = (settings.hooks ?? {}) as Record<string, HookEntry[]>
 
@@ -304,11 +299,29 @@ export async function uninstall(settingsPath?: string, { project = false }: { pr
 // Main
 // ---------------------------------------------------------------------------
 
+function resolveDir(dir?: string): string {
+  if (!dir) return DEFAULT_SETTINGS_PATH
+  return resolve(resolve(dir), ".claude", "settings.json")
+}
+
 async function main() {
   const subcommand = process.argv[2]
-  const project = process.argv.includes("--project")
-  if (subcommand === "setup") return setup(undefined, { project })
-  if (subcommand === "uninstall") return uninstall(undefined, { project })
+
+  if (subcommand === "setup") return setup(resolveDir(process.argv[3]))
+  if (subcommand === "uninstall") return uninstall(resolveDir(process.argv[3]))
+
+  if (subcommand === "token") {
+    const value = process.argv[3]
+    if (!value) {
+      console.error("Usage: moshi-hooks token <value>")
+      process.exit(1)
+    }
+    const { mkdir } = await import("fs/promises")
+    await mkdir(dirname(TOKEN_PATH), { recursive: true })
+    await Bun.write(TOKEN_PATH, value + "\n")
+    console.log(`moshi-hooks: token saved to ${TOKEN_PATH}`)
+    return
+  }
 
   const raw = await Bun.stdin.text()
   if (!raw.trim()) return

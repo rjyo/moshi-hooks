@@ -1,20 +1,40 @@
 {
   "name": "moshi-hooks",
   "version": "0.1.0",
-  "private": true,
+  "description": "Claude Code hook adapter that bridges agent lifecycle events to the Moshi API for iPhone Live Activity push notifications",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "bin": {
     "moshi-hooks": "./src/index.ts"
   },
+  "files": [
+    "src/index.ts"
+  ],
   "scripts": {
     "setup": "bun src/index.ts setup",
-    "setup:project": "bun src/index.ts setup --project",
     "uninstall": "bun src/index.ts uninstall",
-    "uninstall:project": "bun src/index.ts uninstall --project",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "hooks",
+    "moshi",
+    "live-activity",
+    "push-notifications",
+    "agent"
+  ],
+  "author": "rjyo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rjyo/moshi-hooks.git"
+  },
+  "homepage": "https://github.com/rjyo/moshi-hooks#readme",
+  "bugs": {
+    "url": "https://github.com/rjyo/moshi-hooks/issues"
   },
   "devDependencies": {
     "@types/bun": "latest",
