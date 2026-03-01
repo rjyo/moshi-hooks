@@ -1,6 +1,6 @@
 {
   "name": "moshi-hooks",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Claude Code hook adapter that bridges agent lifecycle events to the Moshi API for iPhone Live Activity push notifications",
   "type": "module",
   "main": "./src/index.ts",

@@ -313,8 +313,9 @@ async function main() {
   if (subcommand === "token") {
     const value = process.argv[3]
     if (!value) {
-      console.error("Usage: moshi-hooks token <value>")
-      process.exit(1)
+      const token = await loadToken()
+      console.log(token ?? `no token found (expected at ${TOKEN_PATH})`)
+      return
     }
     const { mkdir } = await import("fs/promises")
     await mkdir(dirname(TOKEN_PATH), { recursive: true })
