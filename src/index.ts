@@ -324,6 +324,17 @@ async function main() {
     return
   }
 
+  // Unknown subcommand — print usage instead of hanging on stdin
+  if (subcommand) {
+    console.error(`Unknown command: ${subcommand}\n`)
+    console.error("Usage:")
+    console.error("  moshi-hooks setup [dir]       Register hooks")
+    console.error("  moshi-hooks uninstall [dir]    Remove hooks")
+    console.error("  moshi-hooks token [value]      Show or set API token")
+    process.exit(1)
+  }
+
+  // No subcommand — hook mode (reads JSON from stdin, invoked by Claude Code)
   const raw = await Bun.stdin.text()
   if (!raw.trim()) return
 
