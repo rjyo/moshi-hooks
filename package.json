@@ -10,7 +10,9 @@
   },
   "scripts": {
     "setup": "bun src/index.ts setup",
+    "setup:project": "bun src/index.ts setup --project",
     "uninstall": "bun src/index.ts uninstall",
+    "uninstall:project": "bun src/index.ts uninstall --project",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },

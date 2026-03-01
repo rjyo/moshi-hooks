@@ -27,16 +27,25 @@ echo "YOUR_API_TOKEN" > ~/.config/moshi/token
 
 ### 2. Register hooks
 
+**User scope** (all projects, `~/.claude/settings.json`):
+
 ```bash
 bun run setup
 ```
 
-This auto-registers all hooks in `~/.claude/settings.json`. It's idempotent — safe to run multiple times. Existing hooks from other tools (e.g. peon-ping) are preserved.
+**Project scope** (single project, `.claude/settings.json`):
+
+```bash
+bun run setup:project
+```
+
+Project-scoped hooks can be committed to the repo and shared with your team. Both are idempotent — safe to run multiple times. Existing hooks from other tools are preserved.
 
 To remove:
 
 ```bash
-bun run uninstall
+bun run uninstall           # user scope
+bun run uninstall:project   # project scope
 ```
 
 All hooks run with `async: true` so they never block Claude.
@@ -47,7 +56,7 @@ All hooks run with `async: true` so they never block Claude.
 |---|---|---|---|
 | `SessionStart` | — | — | No (persists model to state file) |
 | `Stop` | `stop` | `task_complete` | Yes (visible push) |
-| `SubagentStop` | `agent_turn_complete` | `task_complete` | Yes (visible push) |
+| `SubagentStop` | `agent_turn_complete` | `info` | Yes (visible push) |
 | `Notification` | `notification` | `approval_required` | Yes (visible push) |
 | `PreToolUse` | `pre_tool` | `tool_running` | Yes, filtered (silent) |
 | `PostToolUse` | `post_tool` | `tool_finished` | Yes, filtered (silent) |

@@ -221,7 +221,7 @@ async function sendEvent(token: string, event: AgentEvent): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Setup / Uninstall — auto-register hooks in ~/.claude/settings.json
+// Setup / Uninstall — auto-register hooks in settings.json
 // ---------------------------------------------------------------------------
 
 export interface HookEntry {
@@ -245,8 +245,14 @@ async function saveSettings(settingsPath: string, settings: Record<string, unkno
   await Bun.write(settingsPath, JSON.stringify(settings, null, 2) + "\n")
 }
 
-export async function setup(settingsPath = DEFAULT_SETTINGS_PATH): Promise<void> {
-  const settings = await loadSettings(settingsPath)
+function resolveSettingsPath(project: boolean, explicit?: string): string {
+  if (explicit) return explicit
+  return project ? resolve(process.cwd(), ".claude", "settings.json") : DEFAULT_SETTINGS_PATH
+}
+
+export async function setup(settingsPath?: string, { project = false }: { project?: boolean } = {}): Promise<void> {
+  const resolved = resolveSettingsPath(project, settingsPath)
+  const settings = await loadSettings(resolved)
   const hooks = (settings.hooks ?? {}) as Record<string, HookEntry[]>
 
   for (const [event, config] of Object.entries(HOOK_EVENTS)) {
@@ -269,12 +275,13 @@ export async function setup(settingsPath = DEFAULT_SETTINGS_PATH): Promise<void>
   }
 
   settings.hooks = hooks
-  await saveSettings(settingsPath, settings)
-  console.log("moshi-hooks: registered in ~/.claude/settings.json")
+  await saveSettings(resolved, settings)
+  console.log(`moshi-hooks: registered in ${resolved}`)
 }
 
-export async function uninstall(settingsPath = DEFAULT_SETTINGS_PATH): Promise<void> {
-  const settings = await loadSettings(settingsPath)
+export async function uninstall(settingsPath?: string, { project = false }: { project?: boolean } = {}): Promise<void> {
+  const resolved = resolveSettingsPath(project, settingsPath)
+  const settings = await loadSettings(resolved)
   const hooks = (settings.hooks ?? {}) as Record<string, HookEntry[]>
 
   for (const event of Object.keys(HOOK_EVENTS)) {
@@ -289,8 +296,8 @@ export async function uninstall(settingsPath = DEFAULT_SETTINGS_PATH): Promise<v
   }
 
   settings.hooks = hooks
-  await saveSettings(settingsPath, settings)
-  console.log("moshi-hooks: removed from ~/.claude/settings.json")
+  await saveSettings(resolved, settings)
+  console.log(`moshi-hooks: removed from ${resolved}`)
 }
 
 // ---------------------------------------------------------------------------
@@ -299,8 +306,9 @@ export async function uninstall(settingsPath = DEFAULT_SETTINGS_PATH): Promise<v
 
 async function main() {
   const subcommand = process.argv[2]
-  if (subcommand === "setup") return setup()
-  if (subcommand === "uninstall") return uninstall()
+  const project = process.argv.includes("--project")
+  if (subcommand === "setup") return setup(undefined, { project })
+  if (subcommand === "uninstall") return uninstall(undefined, { project })
 
   const raw = await Bun.stdin.text()
   if (!raw.trim()) return
