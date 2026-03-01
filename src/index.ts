@@ -391,7 +391,7 @@ async function main() {
       source: "claude",
       eventType: hook_event_name === "Stop" ? "stop" : "agent_turn_complete",
       sessionId: session_id,
-      category: "task_complete",
+      category: hook_event_name === "Stop" ? "task_complete" : "info",
       title: hook_event_name === "Stop" ? "Task Complete" : "Subagent Complete",
       message: lastMessage,
       eventId: crypto.randomUUID(),
