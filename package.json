@@ -1,7 +1,7 @@
 {
   "name": "moshi-hooks",
   "version": "1.0.2",
-  "description": "Claude Code hook adapter that bridges agent lifecycle events to the Moshi API for iPhone Live Activity push notifications",
+  "description": "Hook adapter for Claude Code, Codex CLI, and OpenCode that bridges agent lifecycle events to the Moshi API for iPhone Live Activity push notifications",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -20,6 +20,8 @@
   "keywords": [
     "claude",
     "claude-code",
+    "codex",
+    "opencode",
     "hooks",
     "moshi",
     "live-activity",

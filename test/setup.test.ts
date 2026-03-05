@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test"
 import { tmpdir } from "os"
-import { join } from "path"
-import { setup, uninstall, loadSettings, isMoshiHook, HOOK_EVENTS, type HookEntry } from "../src/index.ts"
+import { join, dirname } from "path"
+import { setup, uninstall, loadSettings, isMoshiHook, HOOK_EVENTS, setupCodex, uninstallCodex, setupOpenCode, uninstallOpenCode, type HookEntry } from "../src/index.ts"
 
 const TMP = join(tmpdir(), `moshi-hooks-test-${process.pid}`)
 
@@ -226,5 +226,102 @@ describe("isMoshiHook", () => {
 
   test("handles empty hooks array", () => {
     expect(isMoshiHook({ hooks: [] })).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// setupCodex / uninstallCodex
+// ---------------------------------------------------------------------------
+
+describe("setupCodex", () => {
+  test("creates config.toml with notify line when file does not exist", async () => {
+    const path = join(TMP, "codex", "config.toml")
+    await setupCodex(path)
+
+    const content = await Bun.file(path).text()
+    expect(content).toContain('notify = ["bunx", "moshi-hooks", "codex-notify"]')
+  })
+
+  test("appends notify line to existing config", async () => {
+    const path = join(TMP, "codex2", "config.toml")
+    const { mkdir } = await import("fs/promises")
+    await mkdir(dirname(path), { recursive: true })
+    await Bun.write(path, 'model = "o3"\n')
+
+    await setupCodex(path)
+
+    const content = await Bun.file(path).text()
+    expect(content).toContain('model = "o3"')
+    expect(content).toContain('notify = ["bunx", "moshi-hooks", "codex-notify"]')
+  })
+
+  test("is idempotent — no duplicate notify lines", async () => {
+    const path = join(TMP, "codex3", "config.toml")
+    await setupCodex(path)
+    await setupCodex(path)
+    await setupCodex(path)
+
+    const content = await Bun.file(path).text()
+    const matches = content.match(/^notify\s*=/gm)
+    expect(matches?.length).toBe(1)
+  })
+})
+
+describe("uninstallCodex", () => {
+  test("removes notify line from config", async () => {
+    const path = join(TMP, "codex4", "config.toml")
+    await setupCodex(path)
+    await uninstallCodex(path)
+
+    const content = await Bun.file(path).text()
+    expect(content).not.toContain("moshi-hooks")
+  })
+
+  test("is safe when file does not exist", async () => {
+    const path = join(TMP, "codex-missing", "config.toml")
+    // should not throw
+    await uninstallCodex(path)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// setupOpenCode / uninstallOpenCode
+// ---------------------------------------------------------------------------
+
+describe("setupOpenCode", () => {
+  test("generates plugin file", async () => {
+    await setupOpenCode(TMP)
+
+    const pluginPath = join(TMP, ".opencode", "plugins", "moshi-hooks.ts")
+    const content = await Bun.file(pluginPath).text()
+    expect(content).toContain("moshi-hooks")
+    expect(content).toContain("tool.execute.before")
+    expect(content).toContain("tool.execute.after")
+    expect(content).toContain("bunx")
+  })
+
+  test("is idempotent — overwrites with same content", async () => {
+    await setupOpenCode(TMP)
+    await setupOpenCode(TMP)
+
+    const pluginPath = join(TMP, ".opencode", "plugins", "moshi-hooks.ts")
+    const content = await Bun.file(pluginPath).text()
+    expect(content).toContain("moshi-hooks")
+  })
+})
+
+describe("uninstallOpenCode", () => {
+  test("removes plugin file", async () => {
+    await setupOpenCode(TMP)
+    const pluginPath = join(TMP, ".opencode", "plugins", "moshi-hooks.ts")
+    expect(await Bun.file(pluginPath).exists()).toBe(true)
+
+    await uninstallOpenCode(TMP)
+    expect(await Bun.file(pluginPath).exists()).toBe(false)
+  })
+
+  test("is safe when plugin does not exist", async () => {
+    // should not throw
+    await uninstallOpenCode(join(TMP, "nonexistent"))
   })
 })
