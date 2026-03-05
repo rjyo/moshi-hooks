@@ -90,6 +90,8 @@ Tool events are filtered to only fire for: `Bash`, `Edit`, `Write`, `WebFetch`, 
 |---|---|---|
 | `tool.execute.before` | `pre_tool` | `tool_running` |
 | `tool.execute.after` | `post_tool` | `tool_finished` |
+| `session.idle` | `stop` | `task_complete` |
+| `permission.updated` | `notification` | `approval_required` |
 
 ## How it works
 

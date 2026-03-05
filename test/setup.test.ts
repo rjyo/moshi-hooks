@@ -328,6 +328,8 @@ describe("setupOpenCode", () => {
     expect(content).toContain("moshi-hooks")
     expect(content).toContain("tool.execute.before")
     expect(content).toContain("tool.execute.after")
+    expect(content).toContain("session.idle")
+    expect(content).toContain("permission.updated")
     expect(content).toContain("bunx")
   })
 
