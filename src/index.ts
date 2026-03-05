@@ -59,6 +59,7 @@ const API_URL = "https://api.getmoshi.app/api/v1/agent-events"
 const STOP_COOLDOWN_S = 5
 const REPLAY_SUPPRESS_S = 3
 const DEFAULT_SETTINGS_PATH = `${homedir()}/.claude/settings.json`
+const DEFAULT_LOCAL_SETTINGS_PATH = `${homedir()}/.claude/settings.local.json`
 const HOOK_COMMAND = "bunx moshi-hooks"
 const HOOK_IDENTIFIER = "moshi-hooks"
 const CODEX_CONFIG_PATH = `${homedir()}/.codex/config.toml`
@@ -448,25 +449,30 @@ async function handleCodexNotify(jsonArg: string): Promise<void> {
 // Main
 // ---------------------------------------------------------------------------
 
-function resolveDir(dir?: string): string {
-  if (!dir) return DEFAULT_SETTINGS_PATH
-  return resolve(resolve(dir), ".claude", "settings.json")
+function resolveDir(dir?: string, local?: boolean): string {
+  if (!dir) return local ? DEFAULT_LOCAL_SETTINGS_PATH : DEFAULT_SETTINGS_PATH
+  const filename = local ? "settings.local.json" : "settings.json"
+  return resolve(resolve(dir), ".claude", filename)
 }
 
 async function main() {
   const subcommand = process.argv[2]
 
   if (subcommand === "setup") {
-    const flag = process.argv[3]
-    if (flag === "--codex") return setupCodex(process.argv[4])
-    if (flag === "--opencode") return setupOpenCode(process.argv[4])
-    return setup(resolveDir(flag))
+    const args = process.argv.slice(3)
+    const local = args.includes("--local")
+    const flag = args.find((a) => a !== "--local")
+    if (flag === "--codex") return setupCodex(args[args.indexOf("--codex") + 1])
+    if (flag === "--opencode") return setupOpenCode(args[args.indexOf("--opencode") + 1])
+    return setup(resolveDir(flag, local))
   }
   if (subcommand === "uninstall") {
-    const flag = process.argv[3]
-    if (flag === "--codex") return uninstallCodex(process.argv[4])
-    if (flag === "--opencode") return uninstallOpenCode(process.argv[4])
-    return uninstall(resolveDir(flag))
+    const args = process.argv.slice(3)
+    const local = args.includes("--local")
+    const flag = args.find((a) => a !== "--local")
+    if (flag === "--codex") return uninstallCodex(args[args.indexOf("--codex") + 1])
+    if (flag === "--opencode") return uninstallOpenCode(args[args.indexOf("--opencode") + 1])
+    return uninstall(resolveDir(flag, local))
   }
 
   if (subcommand === "codex-notify") {
@@ -494,9 +500,11 @@ async function main() {
     if (subcommand) console.error(`Unknown command: ${subcommand}\n`)
     console.error("Usage:")
     console.error("  moshi-hooks setup [dir]          Register Claude Code hooks")
+    console.error("  moshi-hooks setup --local [dir]  Register hooks in settings.local.json")
     console.error("  moshi-hooks setup --codex        Register Codex CLI notify")
     console.error("  moshi-hooks setup --opencode     Generate OpenCode plugin")
     console.error("  moshi-hooks uninstall [dir]      Remove Claude Code hooks")
+    console.error("  moshi-hooks uninstall --local     Remove hooks from settings.local.json")
     console.error("  moshi-hooks uninstall --codex    Remove Codex CLI notify")
     console.error("  moshi-hooks uninstall --opencode Remove OpenCode plugin")
     console.error("  moshi-hooks token [value]        Show or set API token")

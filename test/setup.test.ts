@@ -230,6 +230,37 @@ describe("isMoshiHook", () => {
 })
 
 // ---------------------------------------------------------------------------
+// setup --local (settings.local.json)
+// ---------------------------------------------------------------------------
+
+describe("setup --local", () => {
+  test("writes hooks to settings.local.json path", async () => {
+    const path = join(TMP, "local.json")
+    await setup(path)
+
+    const settings = await loadSettings(path)
+    const hooks = settings.hooks as Record<string, HookEntry[]>
+
+    for (const event of Object.keys(HOOK_EVENTS)) {
+      expect(hooks[event]).toBeDefined()
+      expect(hooks[event]![0]!.hooks[0]!.command).toContain("moshi-hooks")
+    }
+  })
+
+  test("uninstall removes hooks from local settings", async () => {
+    const path = join(TMP, "local-remove.json")
+    await setup(path)
+    await uninstall(path)
+
+    const settings = await loadSettings(path)
+    const hooks = settings.hooks as Record<string, HookEntry[]>
+    for (const event of Object.keys(HOOK_EVENTS)) {
+      expect(hooks[event]).toBeUndefined()
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
 // setupCodex / uninstallCodex
 // ---------------------------------------------------------------------------
 
