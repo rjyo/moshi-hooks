@@ -153,7 +153,7 @@ async function getLastAssistantMessage(transcriptPath: string | undefined): Prom
     for (let i = lines.length - 1; i >= 0; i--) {
       try {
         const entry = JSON.parse(lines[i]!)
-        if (entry?.role === "assistant" && entry?.message?.content) {
+        if (entry?.type === "assistant" && entry?.message?.content) {
           const content = entry.message.content
           if (typeof content === "string") return content.slice(0, 200)
           if (Array.isArray(content)) {
