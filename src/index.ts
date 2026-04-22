@@ -60,7 +60,6 @@ const STOP_COOLDOWN_S = 5
 const REPLAY_SUPPRESS_S = 3
 const DEFAULT_SETTINGS_PATH = `${homedir()}/.claude/settings.json`
 const DEFAULT_LOCAL_SETTINGS_PATH = `${homedir()}/.claude/settings.local.json`
-const HOOK_COMMAND = "bunx moshi-hooks"
 const HOOK_IDENTIFIER = "moshi-hooks"
 const CODEX_CONFIG_PATH = `${homedir()}/.codex/config.toml`
 const CODEX_NOTIFY_VALUE = '["bunx", "moshi-hooks", "codex-notify"]'
@@ -249,6 +248,21 @@ async function saveSettings(settingsPath: string, settings: Record<string, unkno
 }
 
 export async function setup(settingsPath?: string): Promise<void> {
+  let scriptPath = resolve(import.meta.dirname, "index.ts")
+  if (scriptPath.includes("/bunx-")) {
+    console.log("moshi-hooks: installing globally for a persistent hook path…")
+    const proc = Bun.spawn(["bun", "install", "-g", "moshi-hooks"], {
+      stdout: "inherit",
+      stderr: "inherit",
+    })
+    if ((await proc.exited) !== 0) {
+      throw new Error("moshi-hooks: `bun install -g moshi-hooks` failed")
+    }
+    const bunInstall = process.env.BUN_INSTALL ?? `${homedir()}/.bun`
+    scriptPath = `${bunInstall}/install/global/node_modules/moshi-hooks/src/index.ts`
+  }
+  const hookCommand = `bun ${scriptPath}`
+
   const resolved = settingsPath ?? DEFAULT_SETTINGS_PATH
   const settings = await loadSettings(resolved)
   const hooks = (settings.hooks ?? {}) as Record<string, HookEntry[]>
@@ -261,7 +275,7 @@ export async function setup(settingsPath?: string): Promise<void> {
       hooks: [
         {
           type: "command",
-          command: `${HOOK_COMMAND} # ${HOOK_IDENTIFIER}`,
+          command: `${hookCommand} # ${HOOK_IDENTIFIER}`,
           async: true,
         },
       ],
