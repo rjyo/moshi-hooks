@@ -4,7 +4,7 @@ Hook adapter for Claude Code, Codex CLI, and OpenCode that bridges agent lifecyc
 
 ```
 Claude Code → hooks (stdin) → moshi-hooks → Moshi API → APNs → Live Activity
-Codex CLI   → notify (argv) → moshi-hooks → Moshi API → APNs → Live Activity
+Codex CLI   → hooks (stdin) → moshi-hooks → Moshi API → APNs → Live Activity
 OpenCode    → plugin (spawn) → moshi-hooks → Moshi API → APNs → Live Activity
 ```
 
@@ -42,7 +42,7 @@ moshi-hooks setup --local .       # project scope (.claude/settings.local.json i
 ### Codex CLI
 
 ```bash
-moshi-hooks setup --codex         # writes notify config to ~/.codex/config.toml
+moshi-hooks setup --codex         # writes ~/.codex/hooks.json + enables codex_hooks feature flag
 ```
 
 ### OpenCode
@@ -80,22 +80,30 @@ Tool events are filtered to only fire for: `Bash`, `Edit`, `Write`, `WebFetch`, 
 
 ### Codex CLI
 
-| Codex event | eventType | category |
-|---|---|---|
-| `agent-turn-complete` (notify) | `stop` | `task_complete` |
+| Hook Event | eventType | category | Sends to API? |
+|---|---|---|---|
+| `SessionStart` (matcher `startup\|resume`) | — | — | No (persists model to state file) |
+| `Stop` | `stop` | `task_complete` | Yes (visible push) |
+| `PreToolUse` | `pre_tool` | `tool_running` | Yes, filtered (silent) |
+| `PostToolUse` | `post_tool` | `tool_finished` | Yes, filtered (silent) |
+
+Registered via `~/.codex/hooks.json` (same shape as Claude's `settings.json`) and enabled by setting `codex_hooks = true` under `[features]` in `~/.codex/config.toml`.
 
 ### OpenCode
 
-| OpenCode event | eventType | category |
-|---|---|---|
-| `tool.execute.before` | `pre_tool` | `tool_running` |
-| `tool.execute.after` | `post_tool` | `tool_finished` |
-| `session.idle` | `stop` | `task_complete` |
-| `permission.updated` | `notification` | `approval_required` |
+| OpenCode event | Mapped hook | eventType | category |
+|---|---|---|---|
+| `session.created` | `SessionStart` | — | — |
+| `session.status` (idle) | `Stop` | `stop` | `task_complete` |
+| `message.part.updated` (tool, running/pending) | `PreToolUse` | `pre_tool` | `tool_running` |
+| `message.part.updated` (tool, completed/error) | `PostToolUse` | `post_tool` | `tool_finished` |
+| `permission.asked` | `Notification` | `notification` | `approval_required` |
+
+The plugin also tracks assistant message text from `message.part.updated` so that `Stop` events include the last assistant message as context.
 
 ## How it works
 
-Each hook invocation is a separate process. Claude Code pipes JSON to stdin, Codex passes JSON as an argv argument, and OpenCode spawns moshi-hooks from a generated plugin file.
+Each hook invocation is a separate process. Claude Code and Codex CLI pipe JSON to stdin (Codex hooks invoke `bunx moshi-hooks --source codex`), and OpenCode spawns `moshi-hooks` from a generated plugin file with `--source opencode`.
 
 **Cross-event state** is persisted to `/tmp/moshi-hook-{session_id}.json` so that later events (like `Stop`) can include the model name and last tool from earlier events.
 

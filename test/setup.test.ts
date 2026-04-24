@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test"
 import { tmpdir } from "os"
 import { join, dirname } from "path"
-import { setup, uninstall, loadSettings, isMoshiHook, HOOK_EVENTS, setupCodex, uninstallCodex, setupOpenCode, uninstallOpenCode, type HookEntry } from "../src/index.ts"
+import { setup, uninstall, loadSettings, isMoshiHook, HOOK_EVENTS, CODEX_HOOK_EVENTS, setupCodex, uninstallCodex, setupOpenCode, uninstallOpenCode, setCodexHooksFeature, type HookEntry } from "../src/index.ts"
 
 const TMP = join(tmpdir(), `moshi-hooks-test-${process.pid}`)
 
@@ -265,53 +265,150 @@ describe("setup --local", () => {
 // ---------------------------------------------------------------------------
 
 describe("setupCodex", () => {
-  test("creates config.toml with notify line when file does not exist", async () => {
-    const path = join(TMP, "codex", "config.toml")
-    await setupCodex(path)
+  test("creates hooks.json and config.toml when neither exist", async () => {
+    const hooks = join(TMP, "codex", "hooks.json")
+    const config = join(TMP, "codex", "config.toml")
+    await setupCodex(hooks, config)
 
-    const content = await Bun.file(path).text()
-    expect(content).toContain('notify = ["bunx", "moshi-hooks", "codex-notify"]')
+    const hooksContent = JSON.parse(await Bun.file(hooks).text()) as { hooks: Record<string, HookEntry[]> }
+    for (const event of Object.keys(CODEX_HOOK_EVENTS)) {
+      expect(hooksContent.hooks[event]).toBeDefined()
+      expect(hooksContent.hooks[event]![0]!.hooks[0]!.command).toBe("bunx moshi-hooks --source codex")
+      expect(hooksContent.hooks[event]![0]!.hooks[0]!.timeout).toBe(45)
+    }
+    expect(hooksContent.hooks.SessionStart![0]!.matcher).toBe("startup|resume")
+
+    const configContent = await Bun.file(config).text()
+    expect(configContent).toContain("[features]")
+    expect(configContent).toContain("codex_hooks = true")
   })
 
-  test("appends notify line to existing config", async () => {
-    const path = join(TMP, "codex2", "config.toml")
+  test("preserves unrelated config.toml content and hooks", async () => {
+    const hooks = join(TMP, "codex2", "hooks.json")
+    const config = join(TMP, "codex2", "config.toml")
     const { mkdir } = await import("fs/promises")
-    await mkdir(dirname(path), { recursive: true })
-    await Bun.write(path, 'model = "o3"\n')
+    await mkdir(dirname(config), { recursive: true })
+    await Bun.write(config, 'model = "o3"\n[features]\nother = true\n')
+    await Bun.write(hooks, JSON.stringify({
+      hooks: { Stop: [{ hooks: [{ type: "command", command: "/usr/local/bin/peon.sh" }] }] },
+    }))
 
-    await setupCodex(path)
+    await setupCodex(hooks, config)
 
-    const content = await Bun.file(path).text()
-    expect(content).toContain('model = "o3"')
-    expect(content).toContain('notify = ["bunx", "moshi-hooks", "codex-notify"]')
+    const configContent = await Bun.file(config).text()
+    expect(configContent).toContain('model = "o3"')
+    expect(configContent).toContain("other = true")
+    expect(configContent).toContain("codex_hooks = true")
+
+    const hooksContent = JSON.parse(await Bun.file(hooks).text()) as { hooks: Record<string, HookEntry[]> }
+    expect(hooksContent.hooks.Stop!.length).toBe(2)
+    expect(hooksContent.hooks.Stop![0]!.hooks[0]!.command).toBe("/usr/local/bin/peon.sh")
   })
 
-  test("is idempotent — no duplicate notify lines", async () => {
-    const path = join(TMP, "codex3", "config.toml")
-    await setupCodex(path)
-    await setupCodex(path)
-    await setupCodex(path)
+  test("is idempotent — no duplicates", async () => {
+    const hooks = join(TMP, "codex3", "hooks.json")
+    const config = join(TMP, "codex3", "config.toml")
+    await setupCodex(hooks, config)
+    await setupCodex(hooks, config)
+    await setupCodex(hooks, config)
 
-    const content = await Bun.file(path).text()
-    const matches = content.match(/^notify\s*=/gm)
-    expect(matches?.length).toBe(1)
+    const hooksContent = JSON.parse(await Bun.file(hooks).text()) as { hooks: Record<string, HookEntry[]> }
+    for (const event of Object.keys(CODEX_HOOK_EVENTS)) {
+      expect(hooksContent.hooks[event]!.length).toBe(1)
+    }
+
+    const configContent = await Bun.file(config).text()
+    const flagMatches = configContent.match(/^codex_hooks\s*=/gm)
+    expect(flagMatches?.length).toBe(1)
+  })
+
+  test("strips legacy notify line from old installs", async () => {
+    const hooks = join(TMP, "codex-legacy", "hooks.json")
+    const config = join(TMP, "codex-legacy", "config.toml")
+    const { mkdir } = await import("fs/promises")
+    await mkdir(dirname(config), { recursive: true })
+    await Bun.write(config, 'model = "o3"\nnotify = ["bunx", "moshi-hooks", "codex-notify"]\n')
+
+    await setupCodex(hooks, config)
+
+    const configContent = await Bun.file(config).text()
+    expect(configContent).not.toContain("codex-notify")
+    expect(configContent).toContain('model = "o3"')
+    expect(configContent).toContain("codex_hooks = true")
   })
 })
 
 describe("uninstallCodex", () => {
-  test("removes notify line from config", async () => {
-    const path = join(TMP, "codex4", "config.toml")
-    await setupCodex(path)
-    await uninstallCodex(path)
+  test("removes moshi hooks and feature flag", async () => {
+    const hooks = join(TMP, "codex4", "hooks.json")
+    const config = join(TMP, "codex4", "config.toml")
+    await setupCodex(hooks, config)
+    await uninstallCodex(hooks, config)
 
-    const content = await Bun.file(path).text()
-    expect(content).not.toContain("moshi-hooks")
+    const hooksContent = JSON.parse(await Bun.file(hooks).text()) as { hooks: Record<string, HookEntry[]> }
+    for (const event of Object.keys(CODEX_HOOK_EVENTS)) {
+      expect(hooksContent.hooks[event]).toBeUndefined()
+    }
+
+    const configContent = await Bun.file(config).text()
+    expect(configContent).not.toContain("codex_hooks")
   })
 
-  test("is safe when file does not exist", async () => {
-    const path = join(TMP, "codex-missing", "config.toml")
+  test("preserves non-moshi hooks after uninstall", async () => {
+    const hooks = join(TMP, "codex5", "hooks.json")
+    const config = join(TMP, "codex5", "config.toml")
+    const { mkdir } = await import("fs/promises")
+    await mkdir(dirname(hooks), { recursive: true })
+    await Bun.write(hooks, JSON.stringify({
+      hooks: { Stop: [{ hooks: [{ type: "command", command: "/usr/local/bin/peon.sh" }] }] },
+    }))
+
+    await setupCodex(hooks, config)
+    await uninstallCodex(hooks, config)
+
+    const hooksContent = JSON.parse(await Bun.file(hooks).text()) as { hooks: Record<string, HookEntry[]> }
+    expect(hooksContent.hooks.Stop!.length).toBe(1)
+    expect(hooksContent.hooks.Stop![0]!.hooks[0]!.command).toBe("/usr/local/bin/peon.sh")
+  })
+
+  test("is safe when files do not exist", async () => {
+    const hooks = join(TMP, "codex-missing", "hooks.json")
+    const config = join(TMP, "codex-missing", "config.toml")
     // should not throw
-    await uninstallCodex(path)
+    await uninstallCodex(hooks, config)
+  })
+})
+
+describe("setCodexHooksFeature", () => {
+  test("creates [features] section when missing", () => {
+    expect(setCodexHooksFeature("", true)).toContain("[features]\ncodex_hooks = true")
+    expect(setCodexHooksFeature('model = "o3"\n', true)).toContain("[features]\ncodex_hooks = true")
+  })
+
+  test("adds key under existing [features] section", () => {
+    const result = setCodexHooksFeature("[features]\nother = true\n", true)
+    expect(result).toContain("codex_hooks = true")
+    expect(result).toContain("other = true")
+  })
+
+  test("is idempotent", () => {
+    const once = setCodexHooksFeature("", true)
+    const twice = setCodexHooksFeature(once, true)
+    expect(twice).toBe(once)
+  })
+
+  test("removes key and cleans up empty [features] section", () => {
+    const withFlag = setCodexHooksFeature("", true)
+    const without = setCodexHooksFeature(withFlag, false)
+    expect(without).not.toContain("codex_hooks")
+    expect(without).not.toContain("[features]")
+  })
+
+  test("preserves [features] section when other keys remain", () => {
+    const result = setCodexHooksFeature("[features]\nother = true\ncodex_hooks = true\n", false)
+    expect(result).not.toContain("codex_hooks")
+    expect(result).toContain("[features]")
+    expect(result).toContain("other = true")
   })
 })
 
@@ -326,11 +423,15 @@ describe("setupOpenCode", () => {
     const pluginPath = join(TMP, ".opencode", "plugins", "moshi-hooks.ts")
     const content = await Bun.file(pluginPath).text()
     expect(content).toContain("moshi-hooks")
-    expect(content).toContain("tool.execute.before")
-    expect(content).toContain("tool.execute.after")
-    expect(content).toContain("session.idle")
-    expect(content).toContain("permission.updated")
-    expect(content).toContain("bunx")
+    expect(content).toContain("session.created")
+    expect(content).toContain("session.status")
+    expect(content).toContain("message.part.updated")
+    expect(content).toContain("permission.asked")
+    expect(content).toContain("PreToolUse")
+    expect(content).toContain("PostToolUse")
+    expect(content).toContain("SessionStart")
+    expect(content).toContain("--source")
+    expect(content).toContain("opencode")
   })
 
   test("is idempotent — overwrites with same content", async () => {

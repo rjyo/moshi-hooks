@@ -22,6 +22,8 @@ interface HookInput {
   message?: string
   model?: string
   stop_hook_reason?: string
+  last_assistant_message?: string
+  source?: string
   [key: string]: unknown
 }
 
@@ -58,12 +60,17 @@ const TOKEN_PATH = `${homedir()}/.config/moshi/token`
 const API_URL = "https://api.getmoshi.app/api/v1/agent-events"
 const STOP_COOLDOWN_S = 5
 const REPLAY_SUPPRESS_S = 3
+const HOOK_IDENTIFIER = "moshi-hooks"
+const HOOK_TIMEOUT = 45
+
 const DEFAULT_SETTINGS_PATH = `${homedir()}/.claude/settings.json`
 const DEFAULT_LOCAL_SETTINGS_PATH = `${homedir()}/.claude/settings.local.json`
-const HOOK_COMMAND = "bunx moshi-hooks"
-const HOOK_IDENTIFIER = "moshi-hooks"
-const CODEX_CONFIG_PATH = `${homedir()}/.codex/config.toml`
-const CODEX_NOTIFY_VALUE = '["bunx", "moshi-hooks", "codex-notify"]'
+const CLAUDE_HOOK_COMMAND = `bunx moshi-hooks # ${HOOK_IDENTIFIER}`
+
+const CODEX_DIR = `${homedir()}/.codex`
+const CODEX_HOOKS_PATH = `${CODEX_DIR}/hooks.json`
+const CODEX_CONFIG_PATH = `${CODEX_DIR}/config.toml`
+const CODEX_HOOK_COMMAND = "bunx moshi-hooks --source codex"
 
 export const HOOK_EVENTS: Record<string, { matcher?: string }> = {
   SessionStart: {},
@@ -72,6 +79,15 @@ export const HOOK_EVENTS: Record<string, { matcher?: string }> = {
   Notification: { matcher: "permission_prompt|idle_prompt" },
   PreToolUse: {},
   PostToolUse: {},
+}
+
+// Codex uses the same hooks.json shape as Claude Code. Events listed here are
+// the ones Codex emits that our main stdin handler cares about.
+export const CODEX_HOOK_EVENTS: Record<string, { matcher?: string }> = {
+  SessionStart: { matcher: "startup|resume" },
+  PreToolUse: {},
+  PostToolUse: {},
+  Stop: {},
 }
 
 // ---------------------------------------------------------------------------
@@ -248,23 +264,21 @@ async function saveSettings(settingsPath: string, settings: Record<string, unkno
   await Bun.write(settingsPath, JSON.stringify(settings, null, 2) + "\n")
 }
 
-export async function setup(settingsPath?: string): Promise<void> {
-  const resolved = settingsPath ?? DEFAULT_SETTINGS_PATH
-  const settings = await loadSettings(resolved)
+async function installHooksJson(
+  path: string,
+  events: Record<string, { matcher?: string }>,
+  command: string,
+  hookOpts: { async?: boolean; timeout?: number },
+): Promise<void> {
+  const settings = await loadSettings(path)
   const hooks = (settings.hooks ?? {}) as Record<string, HookEntry[]>
 
-  for (const [event, config] of Object.entries(HOOK_EVENTS)) {
+  for (const [event, config] of Object.entries(events)) {
     const existing = hooks[event] ?? []
     const filtered = existing.filter((e) => !isMoshiHook(e))
 
     const entry: HookEntry = {
-      hooks: [
-        {
-          type: "command",
-          command: `${HOOK_COMMAND} # ${HOOK_IDENTIFIER}`,
-          async: true,
-        },
-      ],
+      hooks: [{ type: "command", command, ...hookOpts }],
     }
     if (config.matcher) entry.matcher = config.matcher
 
@@ -273,16 +287,19 @@ export async function setup(settingsPath?: string): Promise<void> {
   }
 
   settings.hooks = hooks
-  await saveSettings(resolved, settings)
-  console.log(`moshi-hooks: registered in ${resolved}`)
+  const { mkdir } = await import("fs/promises")
+  await mkdir(dirname(path), { recursive: true })
+  await saveSettings(path, settings)
 }
 
-export async function uninstall(settingsPath?: string): Promise<void> {
-  const resolved = settingsPath ?? DEFAULT_SETTINGS_PATH
-  const settings = await loadSettings(resolved)
+async function uninstallHooksJson(
+  path: string,
+  events: Record<string, { matcher?: string }>,
+): Promise<void> {
+  const settings = await loadSettings(path)
   const hooks = (settings.hooks ?? {}) as Record<string, HookEntry[]>
 
-  for (const event of Object.keys(HOOK_EVENTS)) {
+  for (const event of Object.keys(events)) {
     const existing = hooks[event]
     if (!existing) continue
     const filtered = existing.filter((e) => !isMoshiHook(e))
@@ -294,110 +311,248 @@ export async function uninstall(settingsPath?: string): Promise<void> {
   }
 
   settings.hooks = hooks
-  await saveSettings(resolved, settings)
+  await saveSettings(path, settings)
+}
+
+export async function setup(settingsPath?: string): Promise<void> {
+  const resolved = settingsPath ?? DEFAULT_SETTINGS_PATH
+  await installHooksJson(resolved, HOOK_EVENTS, CLAUDE_HOOK_COMMAND, { async: true })
+  console.log(`moshi-hooks: registered in ${resolved}`)
+}
+
+export async function uninstall(settingsPath?: string): Promise<void> {
+  const resolved = settingsPath ?? DEFAULT_SETTINGS_PATH
+  await uninstallHooksJson(resolved, HOOK_EVENTS)
   console.log(`moshi-hooks: removed from ${resolved}`)
 }
 
 // ---------------------------------------------------------------------------
-// Setup / Uninstall — Codex CLI (~/.codex/config.toml)
+// Setup / Uninstall — Codex CLI
+//
+// Codex supports Claude-style hooks via ~/.codex/hooks.json, gated behind a
+// `codex_hooks = true` flag under `[features]` in ~/.codex/config.toml.
+// The hook payload schema matches Claude's closely enough that our main
+// stdin handler processes both (dispatched by the --source flag).
 // ---------------------------------------------------------------------------
 
-export async function setupCodex(configPath?: string): Promise<void> {
-  const resolved = configPath ?? CODEX_CONFIG_PATH
-  let content = ""
-  try {
-    content = await Bun.file(resolved).text()
-  } catch {
-    // file doesn't exist yet
+export function setCodexHooksFeature(contents: string, enable: boolean): string {
+  const lines = contents.split("\n")
+  const featuresHeader = lines.findIndex((l) => l.trim() === "[features]")
+
+  const findKeyIndex = (start: number, end: number): number => {
+    for (let i = start + 1; i < end; i++) {
+      if (lines[i]!.trim().startsWith("codex_hooks")) return i
+    }
+    return -1
   }
 
-  // Remove any existing notify line referencing moshi-hooks
-  const lines = content.split("\n").filter((l) => !(l.includes("notify") && l.includes(HOOK_IDENTIFIER)))
-  // Append our notify line
-  lines.push(`notify = ${CODEX_NOTIFY_VALUE}`)
-  // Clean up extra blank lines at the end
-  const result = lines.filter((l, i) => i < lines.length - 1 || l.trim() !== "").join("\n") + "\n"
+  const findSectionEnd = (start: number): number => {
+    for (let i = start + 1; i < lines.length; i++) {
+      const trimmed = lines[i]!.trim()
+      if (trimmed.startsWith("[") && trimmed.endsWith("]")) return i
+    }
+    return lines.length
+  }
 
-  const { mkdir } = await import("fs/promises")
-  await mkdir(dirname(resolved), { recursive: true })
-  await Bun.write(resolved, result)
-  console.log(`moshi-hooks: codex notify registered in ${resolved}`)
+  if (featuresHeader === -1) {
+    if (!enable) return contents
+    const out = [...lines]
+    if (out.length > 0 && out[out.length - 1]?.trim() !== "") out.push("")
+    out.push("[features]", "codex_hooks = true")
+    return out.join("\n")
+  }
+
+  const sectionEnd = findSectionEnd(featuresHeader)
+  const keyIndex = findKeyIndex(featuresHeader, sectionEnd)
+
+  if (!enable) {
+    if (keyIndex === -1) return contents
+    lines.splice(keyIndex, 1)
+    const newEnd = findSectionEnd(featuresHeader)
+    const bodyIsEmpty = lines
+      .slice(featuresHeader + 1, newEnd)
+      .every((l) => !l.trim() || l.trim().startsWith("#"))
+    if (bodyIsEmpty) {
+      lines.splice(featuresHeader, newEnd - featuresHeader)
+      if (featuresHeader < lines.length && lines[featuresHeader]!.trim() === "") {
+        lines.splice(featuresHeader, 1)
+      }
+    }
+    return lines.join("\n")
+  }
+
+  if (keyIndex === -1) {
+    lines.splice(sectionEnd, 0, "codex_hooks = true")
+  } else {
+    lines[keyIndex] = "codex_hooks = true"
+  }
+  return lines.join("\n")
 }
 
-export async function uninstallCodex(configPath?: string): Promise<void> {
-  const resolved = configPath ?? CODEX_CONFIG_PATH
+async function updateCodexConfig(configPath: string, enable: boolean): Promise<void> {
   let content = ""
   try {
-    content = await Bun.file(resolved).text()
+    content = await Bun.file(configPath).text()
   } catch {
-    console.log(`moshi-hooks: no codex config found at ${resolved}`)
-    return
+    if (!enable) return
   }
 
-  const lines = content.split("\n").filter((l) => !(l.includes("notify") && l.includes(HOOK_IDENTIFIER)))
-  await Bun.write(resolved, lines.join("\n"))
-  console.log(`moshi-hooks: codex notify removed from ${resolved}`)
+  // Strip any legacy `notify = [..., "moshi-hooks", ...]` line from older installs.
+  content = content
+    .split("\n")
+    .filter((l) => !(l.includes("notify") && l.includes(HOOK_IDENTIFIER)))
+    .join("\n")
+  content = setCodexHooksFeature(content, enable)
+
+  if (content && !content.endsWith("\n")) content += "\n"
+  const { mkdir } = await import("fs/promises")
+  await mkdir(dirname(configPath), { recursive: true })
+  await Bun.write(configPath, content)
+}
+
+export async function setupCodex(hooksPath?: string, configPath?: string): Promise<void> {
+  const hp = hooksPath ?? CODEX_HOOKS_PATH
+  const cp = configPath ?? CODEX_CONFIG_PATH
+
+  await installHooksJson(hp, CODEX_HOOK_EVENTS, CODEX_HOOK_COMMAND, { timeout: HOOK_TIMEOUT })
+  await updateCodexConfig(cp, true)
+  console.log(`moshi-hooks: codex hooks registered in ${hp}`)
+}
+
+export async function uninstallCodex(hooksPath?: string, configPath?: string): Promise<void> {
+  const hp = hooksPath ?? CODEX_HOOKS_PATH
+  const cp = configPath ?? CODEX_CONFIG_PATH
+
+  try {
+    await uninstallHooksJson(hp, CODEX_HOOK_EVENTS)
+  } catch {
+    // hooks.json missing is fine
+  }
+  await updateCodexConfig(cp, false)
+  console.log(`moshi-hooks: codex hooks removed from ${hp}`)
 }
 
 // ---------------------------------------------------------------------------
 // Setup / Uninstall — OpenCode (.opencode/plugins/moshi-hooks.ts)
 // ---------------------------------------------------------------------------
 
-const OPENCODE_PLUGIN_TEMPLATE = `// Auto-generated by moshi-hooks — do not edit
+const OPENCODE_PLUGIN_TEMPLATE = `// Auto-generated by moshi-hooks — do not edit.
+// Subscribes to OpenCode's generic \`event\` stream and maps rich lifecycle
+// events into Claude-style hook payloads, then pipes them to \`moshi-hooks\`
+// over stdin so the main CLI can POST them to the Moshi API.
 import { spawn } from "bun"
 
-interface PluginEvent {
-  tool?: { name?: string; input?: Record<string, unknown> }
-  session?: { id?: string; cwd?: string }
-  permission?: { title?: string; message?: string }
-  [key: string]: unknown
+function sendToMoshi(payload: Record<string, unknown>) {
+  try {
+    const proc = spawn(["bunx", "moshi-hooks", "--source", "opencode"], { stdin: "pipe" })
+    proc.stdin.write(JSON.stringify(payload))
+    proc.stdin.end()
+  } catch {}
 }
 
-function sendToMoshi(hookInput: Record<string, unknown>) {
-  const proc = spawn(["bunx", "moshi-hooks"], { stdin: "pipe" })
-  proc.stdin.write(JSON.stringify(hookInput))
-  proc.stdin.end()
+function capitalize(s: string): string {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s
 }
 
-export default {
-  name: "moshi-hooks",
-  subscribe: [
-    "tool.execute.before",
-    "tool.execute.after",
-    "session.idle",
-    "permission.updated",
-  ],
-  onEvent(eventName: string, data: PluginEvent) {
-    const sessionId = data.session?.id ?? "opencode"
-    const cwd = data.session?.cwd
+export default async () => {
+  const msgRoles = new Map<string, { role: string; sessionID: string }>()
+  const sessionCwd = new Map<string, string>()
+  const sessionState = new Map<string, { lastAssistantText: string }>()
 
-    if (eventName === "tool.execute.before" || eventName === "tool.execute.after") {
-      sendToMoshi({
-        hook_event_name: eventName === "tool.execute.before" ? "PreToolUse" : "PostToolUse",
-        session_id: sessionId,
-        source: "opencode",
-        tool_name: data.tool?.name,
-        tool_input: data.tool?.input,
-        cwd,
-      })
-    } else if (eventName === "session.idle") {
-      sendToMoshi({
-        hook_event_name: "Stop",
-        session_id: sessionId,
-        source: "opencode",
-        cwd,
-      })
-    } else if (eventName === "permission.updated") {
-      sendToMoshi({
-        hook_event_name: "Notification",
-        session_id: sessionId,
-        source: "opencode",
-        title: data.permission?.title ?? "Permission Required",
-        message: data.permission?.message ?? "",
-        cwd,
-      })
+  function getState(sid: string) {
+    let s = sessionState.get(sid)
+    if (!s) { s = { lastAssistantText: "" }; sessionState.set(sid, s) }
+    return s
+  }
+
+  function mapEvent(ev: { type: string; properties?: Record<string, any> }): Record<string, unknown> | null {
+    const t = ev.type
+    const p = ev.properties ?? {}
+
+    if (t === "session.created" && p.info) {
+      const cwd = p.info.directory ?? ""
+      sessionCwd.set(p.info.id, cwd)
+      return { hook_event_name: "SessionStart", session_id: p.info.id, cwd }
     }
-  },
+
+    if (t === "session.status" && p.sessionID && p.status?.type === "idle") {
+      return {
+        hook_event_name: "Stop",
+        session_id: p.sessionID,
+        cwd: sessionCwd.get(p.sessionID),
+        last_assistant_message: getState(p.sessionID).lastAssistantText || undefined,
+      }
+    }
+
+    if (t === "message.updated" && p.info?.id && p.info?.sessionID) {
+      msgRoles.set(p.info.id, { role: p.info.role, sessionID: p.info.sessionID })
+      if (msgRoles.size > 200) {
+        const first = msgRoles.keys().next().value
+        if (first) msgRoles.delete(first)
+      }
+      return null
+    }
+
+    if (t === "message.part.updated" && p.part?.type === "text" && p.part?.messageID) {
+      const meta = msgRoles.get(p.part.messageID)
+      if (!meta) return null
+      const text = p.part.text || ""
+      if (meta.role === "assistant" && text) {
+        getState(meta.sessionID).lastAssistantText = text
+      }
+      return null
+    }
+
+    if (t === "message.part.updated" && p.part?.type === "tool" && p.part?.sessionID) {
+      const status = p.part.state?.status
+      const toolName = capitalize(p.part.tool || "")
+      const cwd = sessionCwd.get(p.part.sessionID)
+      if (status === "running" || status === "pending") {
+        return {
+          hook_event_name: "PreToolUse",
+          session_id: p.part.sessionID,
+          cwd,
+          tool_name: toolName,
+          tool_input: p.part.state?.input ?? {},
+        }
+      }
+      if (status === "completed" || status === "error") {
+        return {
+          hook_event_name: "PostToolUse",
+          session_id: p.part.sessionID,
+          cwd,
+          tool_name: toolName,
+        }
+      }
+      return null
+    }
+
+    if (t === "permission.asked" && p.id && p.sessionID) {
+      const tool = capitalize(p.permission || "")
+      const patterns: string[] = p.patterns || []
+      const message = patterns.length > 0
+        ? \`OpenCode wants to run \${tool}: \${patterns[0]}\`
+        : \`OpenCode wants to run \${tool}\`
+      return {
+        hook_event_name: "Notification",
+        session_id: p.sessionID,
+        cwd: sessionCwd.get(p.sessionID),
+        title: \`Allow \${tool}\`,
+        message,
+      }
+    }
+
+    return null
+  }
+
+  return {
+    event: async ({ event }: { event: { type: string; properties?: Record<string, any> } }) => {
+      try {
+        const mapped = mapEvent(event)
+        if (mapped) sendToMoshi(mapped)
+      } catch {}
+    },
+  }
 }
 `
 
@@ -425,39 +580,6 @@ export async function uninstallOpenCode(dir?: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Codex notify handler
-// ---------------------------------------------------------------------------
-
-async function handleCodexNotify(jsonArg: string): Promise<void> {
-  const token = await loadToken()
-  if (!token) return
-
-  let payload: Record<string, unknown>
-  try {
-    payload = JSON.parse(jsonArg)
-  } catch {
-    return
-  }
-
-  const sessionId = String(payload.session_id ?? payload.sessionId ?? crypto.randomUUID())
-  const message = String(payload.message ?? payload.result ?? "Task complete")
-  const projectName = payload.cwd ? basename(String(payload.cwd)) : undefined
-
-  const event: AgentEvent = {
-    source: "codex",
-    eventType: "stop",
-    sessionId,
-    category: "task_complete",
-    title: "Task Complete",
-    message: message.slice(0, 256),
-    eventId: crypto.randomUUID(),
-    projectName,
-  }
-
-  await sendEvent(token, event)
-}
-
-// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -467,34 +589,44 @@ function resolveDir(dir?: string, local?: boolean): string {
   return resolve(resolve(dir), ".claude", filename)
 }
 
-async function main() {
-  const subcommand = process.argv[2]
+function printUsage(): void {
+  console.error("Usage:")
+  console.error("  moshi-hooks setup [dir]          Register Claude Code hooks")
+  console.error("  moshi-hooks setup --local [dir]  Register hooks in settings.local.json")
+  console.error("  moshi-hooks setup --codex        Register Codex CLI hooks (~/.codex/hooks.json)")
+  console.error("  moshi-hooks setup --opencode     Generate OpenCode plugin")
+  console.error("  moshi-hooks uninstall [dir]      Remove Claude Code hooks")
+  console.error("  moshi-hooks uninstall --local     Remove hooks from settings.local.json")
+  console.error("  moshi-hooks uninstall --codex    Remove Codex CLI hooks")
+  console.error("  moshi-hooks uninstall --opencode Remove OpenCode plugin")
+  console.error("  moshi-hooks token [value]        Show or set API token")
+}
 
-  if (subcommand === "setup") {
-    const args = process.argv.slice(3)
+async function main() {
+  const argv = process.argv.slice(2)
+  const cmd = argv[0]
+  const isFlag = cmd?.startsWith("-") ?? false
+
+  if (cmd === "setup") {
+    const args = argv.slice(1)
     const local = args.includes("--local")
     const flag = args.find((a) => a !== "--local")
-    if (flag === "--codex") return setupCodex(args[args.indexOf("--codex") + 1])
+    if (flag === "--codex") return setupCodex()
     if (flag === "--opencode") return setupOpenCode(args[args.indexOf("--opencode") + 1])
     return setup(resolveDir(flag, local))
   }
-  if (subcommand === "uninstall") {
-    const args = process.argv.slice(3)
+
+  if (cmd === "uninstall") {
+    const args = argv.slice(1)
     const local = args.includes("--local")
     const flag = args.find((a) => a !== "--local")
-    if (flag === "--codex") return uninstallCodex(args[args.indexOf("--codex") + 1])
+    if (flag === "--codex") return uninstallCodex()
     if (flag === "--opencode") return uninstallOpenCode(args[args.indexOf("--opencode") + 1])
     return uninstall(resolveDir(flag, local))
   }
 
-  if (subcommand === "codex-notify") {
-    const jsonArg = process.argv[3]
-    if (jsonArg) return handleCodexNotify(jsonArg)
-    return
-  }
-
-  if (subcommand === "token") {
-    const value = process.argv[3]
+  if (cmd === "token") {
+    const value = argv[1]
     if (!value) {
       const token = await loadToken()
       console.log(token ?? `no token found (expected at ${TOKEN_PATH})`)
@@ -507,23 +639,26 @@ async function main() {
     return
   }
 
-  // Not hook mode — print usage
-  if (subcommand || process.stdin.isTTY) {
-    if (subcommand) console.error(`Unknown command: ${subcommand}\n`)
-    console.error("Usage:")
-    console.error("  moshi-hooks setup [dir]          Register Claude Code hooks")
-    console.error("  moshi-hooks setup --local [dir]  Register hooks in settings.local.json")
-    console.error("  moshi-hooks setup --codex        Register Codex CLI notify")
-    console.error("  moshi-hooks setup --opencode     Generate OpenCode plugin")
-    console.error("  moshi-hooks uninstall [dir]      Remove Claude Code hooks")
-    console.error("  moshi-hooks uninstall --local     Remove hooks from settings.local.json")
-    console.error("  moshi-hooks uninstall --codex    Remove Codex CLI notify")
-    console.error("  moshi-hooks uninstall --opencode Remove OpenCode plugin")
-    console.error("  moshi-hooks token [value]        Show or set API token")
-    process.exit(subcommand ? 1 : 0)
+  // Unknown subcommand (and not a flag like --source) → print usage
+  if (cmd && !isFlag) {
+    console.error(`Unknown command: ${cmd}\n`)
+    printUsage()
+    process.exit(1)
   }
 
-  // Hook mode — reads JSON from stdin (invoked by Claude Code)
+  // No subcommand and no stdin piped → print usage
+  if (!cmd && process.stdin.isTTY) {
+    printUsage()
+    process.exit(0)
+  }
+
+  // Hook mode — reads JSON from stdin (invoked by Claude Code / Codex).
+  // --source <agent> can be passed by the installer-generated hook command
+  // so events are tagged correctly even if the agent doesn't set a source
+  // field in its stdin payload.
+  const sourceIdx = argv.indexOf("--source")
+  const cliSource = sourceIdx >= 0 ? argv[sourceIdx + 1] : undefined
+
   const raw = await Bun.stdin.text()
   if (!raw.trim()) return
 
@@ -537,7 +672,8 @@ async function main() {
   const { hook_event_name, session_id } = input
   if (!hook_event_name || !session_id) return
 
-  const source = (input.source === "codex" || input.source === "opencode") ? input.source : "claude" as const
+  const resolvedSource = cliSource ?? input.source
+  const source = (resolvedSource === "codex" || resolvedSource === "opencode") ? resolvedSource : "claude" as const
   const projectName = input.cwd ? basename(input.cwd) : undefined
 
   // --- SessionStart: persist model + timestamp, don't POST ---
@@ -631,7 +767,8 @@ async function main() {
     const token = await loadToken()
     if (!token) return
 
-    const lastMessage = await getLastAssistantMessage(input.transcript_path)
+    const lastMessage = input.last_assistant_message?.slice(0, 200)
+      ?? await getLastAssistantMessage(input.transcript_path)
 
     const event: AgentEvent = {
       source,
