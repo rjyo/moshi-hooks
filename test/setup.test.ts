@@ -417,21 +417,25 @@ describe("setCodexHooksFeature", () => {
 // ---------------------------------------------------------------------------
 
 describe("setupOpenCode", () => {
-  test("generates plugin file", async () => {
+  test("generates plugin file from template", async () => {
     await setupOpenCode(TMP)
 
     const pluginPath = join(TMP, ".opencode", "plugins", "moshi-hooks.ts")
     const content = await Bun.file(pluginPath).text()
-    expect(content).toContain("moshi-hooks")
-    expect(content).toContain("session.created")
-    expect(content).toContain("session.status")
-    expect(content).toContain("message.part.updated")
+    // Plugin posts directly to the Moshi API, no stdin hop.
+    expect(content).toContain("api.getmoshi.app")
+    expect(content).toContain(`"opencode"`)
+    // Rich event coverage ported from opencode-moshi-live.
     expect(content).toContain("permission.asked")
-    expect(content).toContain("PreToolUse")
-    expect(content).toContain("PostToolUse")
-    expect(content).toContain("SessionStart")
-    expect(content).toContain("--source")
-    expect(content).toContain("opencode")
+    expect(content).toContain("permission.replied")
+    expect(content).toContain("session.idle")
+    expect(content).toContain("session.error")
+    expect(content).toContain("tool.execute.before")
+    expect(content).toContain("tool.execute.after")
+    expect(content).toContain("Waiting for Reply")
+    expect(content).toContain("Step Complete")
+    // Credit preserved in generated plugin header.
+    expect(content).toContain("opencode-moshi-live")
   })
 
   test("is idempotent — overwrites with same content", async () => {

@@ -9,7 +9,8 @@
     "moshi-hooks": "./src/index.ts"
   },
   "files": [
-    "src/index.ts"
+    "src/index.ts",
+    "templates/opencode-plugin.ts"
   ],
   "scripts": {
     "setup": "bun src/index.ts setup",

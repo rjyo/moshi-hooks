@@ -3,9 +3,9 @@
 Hook adapter for Claude Code, Codex CLI, and OpenCode that bridges agent lifecycle events to the Moshi API, which fans out push notifications to update the Live Activity on your iPhone.
 
 ```
-Claude Code → hooks (stdin) → moshi-hooks → Moshi API → APNs → Live Activity
-Codex CLI   → hooks (stdin) → moshi-hooks → Moshi API → APNs → Live Activity
-OpenCode    → plugin (spawn) → moshi-hooks → Moshi API → APNs → Live Activity
+Claude Code → hooks (stdin)  → moshi-hooks → Moshi API → APNs → Live Activity
+Codex CLI   → hooks (stdin)  → moshi-hooks → Moshi API → APNs → Live Activity
+OpenCode    → in-process plugin             → Moshi API → APNs → Live Activity
 ```
 
 ## Install
@@ -91,23 +91,34 @@ Registered via `~/.codex/hooks.json` (same shape as Claude's `settings.json`) an
 
 ### OpenCode
 
-| OpenCode event | Mapped hook | eventType | category |
+| OpenCode event | Notification title | eventType | category |
 |---|---|---|---|
-| `session.created` | `SessionStart` | — | — |
-| `session.status` (idle) | `Stop` | `stop` | `task_complete` |
-| `message.part.updated` (tool, running/pending) | `PreToolUse` | `pre_tool` | `tool_running` |
-| `message.part.updated` (tool, completed/error) | `PostToolUse` | `post_tool` | `tool_finished` |
-| `permission.asked` | `Notification` | `notification` | `approval_required` |
+| `tool.execute.before` (bash/edit/write/read/glob/grep/task/apply_patch/webfetch/websearch) | `Running <Tool>` | `pre_tool` | `tool_running` |
+| `tool.execute.after` (same set) | `Finished <Tool>` | `post_tool` | `tool_finished` |
+| `tool.execute.before` (question) | `Question` | `notification` | `approval_required` |
+| `permission.asked` / `permission.updated` | `Permission Required` | `notification` | `approval_required` |
+| `message.part.updated` (text, question-shaped) | `Waiting for Reply` | `notification` | `approval_required` |
+| `message.part.updated` (step-start) | `Thinking` | `notification` | `info` |
+| `message.part.updated` (reasoning) | `Reasoning` | `notification` | `info` |
+| `message.part.updated` (step-finish) | `Step Complete` | `notification` | `info` |
+| `message.part.updated` (subtask) | `Delegating` | `notification` | `info` |
+| `session.status` (retry) | `Retrying` | `notification` | `error` |
+| `session.error` | `Session Error` | `notification` | `error` |
+| `session.idle` (when not awaiting input / has activity) | `Task Complete` | `stop` | `task_complete` |
 
-The plugin also tracks assistant message text from `message.part.updated` so that `Stop` events include the last assistant message as context.
+The plugin suppresses `session.idle` completions while awaiting a permission / question / assistant reply, deduplicates repeated permission and reasoning events with short TTLs, and skips child (subagent) sessions to avoid duplicate noise.
 
 ## How it works
 
-Each hook invocation is a separate process. Claude Code and Codex CLI pipe JSON to stdin (Codex hooks invoke `bunx moshi-hooks --source codex`), and OpenCode spawns `moshi-hooks` from a generated plugin file with `--source opencode`.
+Claude Code and Codex CLI pipe JSON to stdin for each hook event — a fresh `moshi-hooks` process normalizes the payload and POSTs to the Moshi API. OpenCode is different: its generated plugin runs **in-process** inside OpenCode and POSTs directly to the Moshi API, so it can maintain wait-state, dedup, and child-session info across events without paying a process-spawn tax per event.
 
-**Cross-event state** is persisted to `/tmp/moshi-hook-{session_id}.json` so that later events (like `Stop`) can include the model name and last tool from earlier events.
+**Cross-event state** (Claude / Codex) is persisted to `/tmp/moshi-hook-{session_id}.json` so that later events (like `Stop`) can include the model name and last tool from earlier events. The OpenCode plugin keeps equivalent state in memory for its session lifetime.
 
-**Context window usage** is estimated by reading the last ~10KB of the transcript JSONL and parsing the most recent usage data.
+**Context window usage** is estimated by reading the last ~10KB of the Claude transcript JSONL and parsing the most recent usage data.
+
+## Credits
+
+The OpenCode plugin (`templates/opencode-plugin.ts`) is adapted from [opencode-moshi-live](https://github.com/young5lee/opencode-moshi-live) by [young5lee](https://github.com/young5lee), MIT licensed. It contributed the in-process architecture, wait-state tracking, TTL deduplication, child-session filtering, assistant-question inference, tool-argument formatting, and the rich progress event mapping (Thinking / Reasoning / Step Complete / Delegating / Retrying).
 
 ## Testing
 
