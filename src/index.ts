@@ -6,6 +6,9 @@
 
 import { homedir } from "os"
 import { basename, dirname, resolve } from "path"
+import pkg from "../package.json" with { type: "json" }
+
+const VERSION = pkg.version
 
 // ---------------------------------------------------------------------------
 // Types
@@ -485,6 +488,7 @@ function resolveDir(dir?: string, local?: boolean): string {
 }
 
 function printUsage(): void {
+  console.error(`moshi-hooks ${VERSION}\n`)
   console.error("Usage:")
   console.error("  moshi-hooks setup [dir]          Register Claude Code hooks")
   console.error("  moshi-hooks setup --local [dir]  Register hooks in settings.local.json")
@@ -495,12 +499,24 @@ function printUsage(): void {
   console.error("  moshi-hooks uninstall --codex    Remove Codex CLI hooks")
   console.error("  moshi-hooks uninstall --opencode Remove OpenCode plugin")
   console.error("  moshi-hooks token [value]        Show or set API token")
+  console.error("  moshi-hooks --version            Print version")
+  console.error("  moshi-hooks --help               Print this usage")
 }
 
 async function main() {
   const argv = process.argv.slice(2)
   const cmd = argv[0]
   const isFlag = cmd?.startsWith("-") ?? false
+
+  if (cmd === "--version" || cmd === "-v") {
+    console.log(VERSION)
+    return
+  }
+
+  if (cmd === "--help" || cmd === "-h") {
+    printUsage()
+    return
+  }
 
   if (cmd === "setup") {
     const args = argv.slice(1)
@@ -541,8 +557,9 @@ async function main() {
     process.exit(1)
   }
 
-  // No subcommand and no stdin piped → print usage
-  if (!cmd && process.stdin.isTTY) {
+  // If stdin isn't piped, we're not being invoked as a hook — print usage.
+  // Covers: no args, or flag-only args like `--source codex` on the terminal.
+  if (process.stdin.isTTY) {
     printUsage()
     process.exit(0)
   }
