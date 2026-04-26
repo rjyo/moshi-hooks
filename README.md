@@ -42,8 +42,11 @@ moshi-hooks setup --local .       # project scope (.claude/settings.local.json i
 ### Codex CLI
 
 ```bash
-moshi-hooks setup --codex         # writes ~/.codex/hooks.json + enables codex_hooks feature flag
+moshi-hooks setup --codex         # writes quiet Codex hooks to ~/.codex/hooks.json + enables codex_hooks feature flag
 ```
+
+Codex hook commands are registered as `bunx --silent moshi-hooks --source codex`
+so Bun's dependency-resolution output does not get reported as hook output.
 
 ### OpenCode
 

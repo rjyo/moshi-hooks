@@ -73,7 +73,7 @@ const CLAUDE_HOOK_COMMAND = `bunx moshi-hooks # ${HOOK_IDENTIFIER}`
 const CODEX_DIR = `${homedir()}/.codex`
 const CODEX_HOOKS_PATH = `${CODEX_DIR}/hooks.json`
 const CODEX_CONFIG_PATH = `${CODEX_DIR}/config.toml`
-const CODEX_HOOK_COMMAND = "bunx moshi-hooks --source codex"
+const CODEX_HOOK_COMMAND = "bunx --silent moshi-hooks --source codex"
 
 export const HOOK_EVENTS: Record<string, { matcher?: string }> = {
   SessionStart: {},

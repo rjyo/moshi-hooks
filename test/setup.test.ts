@@ -273,7 +273,7 @@ describe("setupCodex", () => {
     const hooksContent = JSON.parse(await Bun.file(hooks).text()) as { hooks: Record<string, HookEntry[]> }
     for (const event of Object.keys(CODEX_HOOK_EVENTS)) {
       expect(hooksContent.hooks[event]).toBeDefined()
-      expect(hooksContent.hooks[event]![0]!.hooks[0]!.command).toBe("bunx moshi-hooks --source codex")
+      expect(hooksContent.hooks[event]![0]!.hooks[0]!.command).toBe("bunx --silent moshi-hooks --source codex")
       expect(hooksContent.hooks[event]![0]!.hooks[0]!.timeout).toBe(45)
     }
     expect(hooksContent.hooks.SessionStart![0]!.matcher).toBe("startup|resume")
